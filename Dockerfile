@@ -15,9 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsm6 \
     libxext6 \
-    gimp \
     libvulkan1 \
     git \
+    openssh-client \
  && python -m pip install --upgrade pip setuptools wheel \
  && python -m pip install \
     torch==2.7.1 \
