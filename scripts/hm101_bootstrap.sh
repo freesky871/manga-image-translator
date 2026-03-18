@@ -7,11 +7,6 @@ ROOT="${ROOT:-/app}"
 LOG_DIR="${LOG_DIR:-/workspace/logs}"
 ENV_FILE="${ENV_FILE:-/workspace/.hm101_env}"
 
-# model files
-MODEL_BASE_URL="${MODEL_BASE_URL:-https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3}"
-MODEL_FALLBACK_PREFIXES="${MODEL_FALLBACK_PREFIXES:-https://ghfast.top/ https://ghproxy.com/}"
-MODEL_LIST="${MODEL_LIST:-/app/models/detection/detect-20241225.ckpt /app/models/ocr/ocr_ar_48px.ckpt /app/models/ocr/alphabet-all-v7.txt /app/models/inpainting/inpainting_lama_mpe.ckpt}"
-
 find_root() {
   for d in /app /workspace /; do
     if [ -f "$d/server/main.py" ]; then
@@ -49,34 +44,6 @@ set -a
 [ -f "${ENV_FILE}" ] && . "${ENV_FILE}"
 set +a
 
-download_one_model() {
-  local model_path="$1"
-  local model_dir model_name primary ok u
-  model_dir="$(dirname "${model_path}")"
-  model_name="$(basename "${model_path}")"
-  primary="${MODEL_BASE_URL%/}/${model_name}"
-
-  mkdir -p "${model_dir}"
-  rm -f "${model_path}.part" "${model_path}" || true
-  rm -f "${model_dir}"/*.part || true
-
-  ok=""
-  for u in "${primary}" $(for px in ${MODEL_FALLBACK_PREFIXES}; do echo "${px}${primary}"; done); do
-    if curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 1200 -o "${model_path}" "${u}"; then
-      ok="${u}"
-      break
-    fi
-  done
-
-  if [ -z "${ok}" ] || [ ! -s "${model_path}" ]; then
-    echo "[hm101] model download failed: ${model_name}"
-    return 1
-  fi
-
-  echo "[hm101] model ready: ${model_name} <- ${ok}"
-  return 0
-}
-
 start_worker() {
   local p="$1"
   nohup bash -lc "set -a; [ -f '${ENV_FILE}' ] && . '${ENV_FILE}'; set +a; exec '${PYBIN}' server/main.py --host 0.0.0.0 --port '${p}' --start-instance --use-gpu --nonce None" \
@@ -86,7 +53,7 @@ start_worker() {
 
 wait_http_ready() {
   local p="$1" i
-  for i in $(seq 1 90); do
+  for i in $(seq 1 120); do
     if curl -fsS --max-time 3 "http://127.0.0.1:${p}/" >/dev/null 2>&1; then
       echo "[hm101] worker ${p} http ready"
       return 0
@@ -99,21 +66,11 @@ wait_http_ready() {
 
 cd "${ROOT}"
 
-# full model preheat
-for m in ${MODEL_LIST}; do
-  download_one_model "${m}"
-done
-
-# compatibility alias
-if [ -s /app/models/inpainting/inpainting_lama_mpe.ckpt ] && [ ! -s /app/models/inpainting/lama_large_512px.ckpt ]; then
-  cp -f /app/models/inpainting/inpainting_lama_mpe.ckpt /app/models/inpainting/lama_large_512px.ckpt || true
-fi
-
-# stage 1: single worker
+# 阶段1：先启动单 worker，确认服务可用
 start_worker "${FIRST_PORT}"
 wait_http_ready "${FIRST_PORT}"
 
-# stage 2: remaining workers
+# 阶段2：再启动其余 worker
 for p in ${PORTS}; do
   [ "${p}" = "${FIRST_PORT}" ] && continue
   start_worker "${p}"
